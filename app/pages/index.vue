@@ -1,5 +1,3 @@
 <template>
-  <div class="min-h-screen flex justify-center items-center">
-    <ConnectWallet />
-  </div>
+  <div class="flex justify-center items-center"><ConnectWallet /></div>
 </template>

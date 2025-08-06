@@ -1,49 +1,124 @@
-// composables/useWallet.ts
-import { ethers } from "ethers";
-import { computed, ref } from "vue";
+import type { MetaMaskInpageProvider } from "@metamask/providers";
+import { BrowserProvider } from "ethers";
+import { computed, onMounted, ref } from "vue";
 
-const provider = ref<ethers.BrowserProvider | null>(null);
-const signer = ref<ethers.JsonRpcSigner | null>(null);
+const provider = ref<BrowserProvider | null>(null);
 const address = ref<string | null>(null);
-const chainId = ref<number | null>(null);
+const isConnecting = ref(false);
+const walletType = ref<"evm" | "solana" | null>(null);
+
 const isConnected = computed(() => !!address.value);
 
 export function useWallet() {
+  onMounted(async () => {
+    // ✅ Safe client-side logic only
+    const savedAddress = localStorage.getItem("wallet_address");
+    const savedType = localStorage.getItem("wallet_type") as
+      | "evm"
+      | "solana"
+      | null;
+
+    if (savedAddress) {
+      address.value = savedAddress;
+      walletType.value = savedType;
+    }
+
+    if (window.ethereum) {
+      try {
+        const accounts = await window.ethereum.request({
+          method: "eth_accounts",
+        });
+        if (Array.isArray(accounts) && accounts.length > 0) {
+          const browserProvider = new BrowserProvider(window.ethereum);
+          const signer = await browserProvider.getSigner();
+          const userAddress = await signer.getAddress();
+
+          address.value = userAddress;
+          provider.value = browserProvider;
+          walletType.value = "evm";
+
+          localStorage.setItem("wallet_address", userAddress);
+          localStorage.setItem("wallet_type", "evm");
+        }
+      } catch (err) {
+        console.warn("Auto-connect failed:", err);
+      }
+
+      window.ethereum.on("accountsChanged", (...args: unknown[]) => {
+        const accounts = args[0] as string[];
+        if (!accounts?.length) {
+          disconnectWallet();
+          return;
+        }
+        address.value = accounts[0]!;
+        localStorage.setItem("wallet_address", accounts[0]!);
+      });
+
+      window.ethereum.on("chainChanged", () => {
+        window.location.reload();
+      });
+    }
+  });
+
   const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("MetaMask is not installed");
+    if (typeof window === "undefined" || !window.ethereum) {
+      alert("MetaMask is not installed.");
       return;
     }
 
-    provider.value = new ethers.BrowserProvider(window.ethereum);
-
     try {
-      const accounts = await window.ethereum.request({
-        method: "eth_requestAccounts",
+      isConnecting.value = true;
+
+      await window.ethereum.request({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }],
       });
-      signer.value = await provider.value.getSigner();
-      address.value = accounts[0];
-      const network = await provider.value.getNetwork();
-      chainId.value = Number(network.chainId);
+
+      const accounts = (await window.ethereum.request({
+        method: "eth_requestAccounts",
+      })) as string[];
+
+      if (!accounts.length) throw new Error("No accounts returned");
+
+      const browserProvider = new BrowserProvider(window.ethereum);
+      const signer = await browserProvider.getSigner();
+      const userAddress = await signer.getAddress();
+
+      address.value = userAddress;
+      provider.value = browserProvider;
+      walletType.value = "evm";
+
+      localStorage.setItem("wallet_address", userAddress);
+      localStorage.setItem("wallet_type", "evm");
     } catch (err) {
-      console.error("Connection error:", err);
+      console.error("[!] Wallet connection failed:", err);
+    } finally {
+      isConnecting.value = false;
     }
   };
 
   const disconnectWallet = () => {
-    provider.value = null;
-    signer.value = null;
     address.value = null;
-    chainId.value = null;
+    provider.value = null;
+    walletType.value = null;
+
+    localStorage.removeItem("wallet_address");
+    localStorage.removeItem("wallet_type");
   };
 
   return {
     connectWallet,
     disconnectWallet,
-    provider,
-    signer,
     address,
-    chainId,
     isConnected,
+    isConnecting,
+    walletType,
+    provider,
   };
+}
+
+declare global {
+  interface Window {
+    ethereum?: MetaMaskInpageProvider;
+  }
 }
