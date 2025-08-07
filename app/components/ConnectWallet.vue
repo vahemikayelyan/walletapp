@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useWallet } from "~/composables/useWallet";
 
 const isClient = ref(false);
@@ -66,15 +66,9 @@ const openMetaMask = () => {
 const {
   connectWallet,
   disconnectWallet,
-  address,
+  shortAddress,
   isConnected,
   isConnecting,
   walletType,
 } = useWallet();
-
-const shortAddress = computed(() =>
-  address.value
-    ? `${address.value.slice(0, 6)}...${address.value.slice(-4)}`
-    : ""
-);
 </script>
