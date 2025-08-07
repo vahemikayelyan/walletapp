@@ -2,7 +2,7 @@ import type { MetaMaskInpageProvider } from "@metamask/providers";
 import { BrowserProvider } from "ethers";
 import { computed, onMounted, ref } from "vue";
 
-// 🌐 Global reactive state
+// Global reactive state
 const provider = ref<BrowserProvider | null>(null);
 const address = ref<string | null>(null);
 const isConnecting = ref(false);
@@ -11,7 +11,7 @@ const walletType = ref<"evm" | null>(null);
 const isConnected = computed(() => !!address.value);
 const shortAddress = computed(() =>
   address.value
-    ? `${address.value.slice(0, 6)}...${address.value.slice(-4)}`
+    ? `${address.value.slice(0, 6)}...${address.value.slice(-6)}`
     : null
 );
 
