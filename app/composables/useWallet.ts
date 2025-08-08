@@ -107,7 +107,7 @@ export function useWallet() {
 
       if (!accounts?.length) throw new Error("No accounts returned");
 
-      setupProvider(eth);
+      await setupProvider(eth);
       attachListeners(eth);
     } catch (err: any) {
       console.error("[!] Wallet connection failed:", err);
@@ -132,7 +132,7 @@ export function useWallet() {
       })) as string[];
 
       if (Array.isArray(accounts) && accounts.length > 0) {
-        setupProvider(eth);
+        await setupProvider(eth);
         attachListeners(eth);
       }
     } catch (err) {
