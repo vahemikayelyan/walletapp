@@ -3,15 +3,15 @@ import { BrowserProvider } from "ethers";
 import { computed, onMounted, ref } from "vue";
 
 // Global reactive state
-const provider = ref<BrowserProvider | null>(null);
-const address = ref<string | null>(null);
+const provider = ref<BrowserProvider | null>();
+const walletType = ref<"evm" | null>();
+const address = ref<string | null>();
 const isConnecting = ref(false);
-const walletType = ref<"evm" | null>(null);
 
 const isConnected = computed(() => !!address.value);
 const shortAddress = computed(() =>
   address.value
-    ? `${address.value.slice(0, 6)}...${address.value.slice(-6)}`
+    ? `${address.value.slice(0, 7)}...${address.value.slice(-5)}`
     : null
 );
 
@@ -19,7 +19,7 @@ export function useWallet() {
   let handleAccountsChanged: ((...args: unknown[]) => void) | null = null;
   let handleChainChanged: (() => void) | null = null;
 
-  // 🔧 Initializes provider, signer, and sets address
+  // Initializes provider, signer, and sets address
   const setupProvider = async (ethProvider: MetaMaskInpageProvider) => {
     const browserProvider = new BrowserProvider(ethProvider);
     const signer = await browserProvider.getSigner();
@@ -27,20 +27,19 @@ export function useWallet() {
 
     provider.value = browserProvider;
     address.value = userAddress;
-    walletType.value = "evm";
   };
 
-  // 📡 Attach wallet event listeners
+  // Attach wallet event listeners
   const attachListeners = (ethProvider: MetaMaskInpageProvider) => {
     if (handleAccountsChanged || handleChainChanged) return;
 
     handleAccountsChanged = (...args: unknown[]) => {
-      const accounts = args[0] as string[] | undefined;
+      const accounts = args[0] as string[];
 
-      if (!accounts?.length) {
-        disconnectWallet();
+      if (accounts?.length) {
+        address.value = accounts[0];
       } else {
-        address.value = accounts[0]!;
+        disconnectWallet();
       }
     };
 
@@ -52,7 +51,7 @@ export function useWallet() {
     ethProvider.on("chainChanged", handleChainChanged);
   };
 
-  // 🔌 Remove listeners
+  // Remove listeners
   const detachListeners = () => {
     const eth = window.ethereum;
 
@@ -108,7 +107,7 @@ export function useWallet() {
 
       if (!accounts?.length) throw new Error("No accounts returned");
 
-      await setupProvider(eth);
+      setupProvider(eth);
       attachListeners(eth);
     } catch (err: any) {
       console.error("[!] Wallet connection failed:", err);
@@ -133,7 +132,7 @@ export function useWallet() {
       })) as string[];
 
       if (Array.isArray(accounts) && accounts.length > 0) {
-        await setupProvider(eth);
+        setupProvider(eth);
         attachListeners(eth);
       }
     } catch (err) {
