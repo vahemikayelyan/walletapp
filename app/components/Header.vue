@@ -115,7 +115,8 @@
 const { hasRequestedWallet } = useWallet();
 const links = [
   { label: "Home", to: "/" },
-  { label: "Features", to: "/features" },
+  { label: "Cryptos", to: "/cryptos" },
+  { label: "About", to: "/about" },
   { label: "Docs", to: "/docs" },
 ];
 
