@@ -9,7 +9,7 @@
 
   <header
     v-if="hasRequestedWallet"
-    class="sticky top-0 z-50 border-b border-gray-300/90 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60"
+    class="shadow-sm sticky top-0 z-50 border-b border-gray-300/90 bg-white backdrop-blur"
   >
     <nav class="container mx-auto px-4">
       <div class="flex h-16 items-center justify-between">
@@ -38,7 +38,7 @@
               class="relative inline-flex items-center text-sm transition text-gray-600 hover:text-gray-900"
               active-class="text-gray-900"
             >
-              <span class="px-1 py-2">
+              <span class="p-1">
                 {{ link.label }}
                 <span
                   :class="[
