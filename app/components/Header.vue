@@ -8,6 +8,7 @@
   </a>
 
   <header
+    v-if="hasRequestedWallet"
     class="sticky top-0 z-50 border-b border-gray-300/90 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60"
   >
     <nav class="container mx-auto px-4">
@@ -111,6 +112,7 @@
 </template>
 
 <script setup lang="ts">
+const { hasRequestedWallet } = useWallet();
 const links = [
   { label: "Home", to: "/" },
   { label: "Features", to: "/features" },

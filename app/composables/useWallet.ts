@@ -7,6 +7,8 @@ const provider = ref<BrowserProvider | null>();
 const walletType = ref<"evm" | null>();
 const address = ref<string | null>();
 const isConnecting = ref(false);
+const hasMounted = ref(false);
+const hasRequestedWallet = ref(false);
 
 const isConnected = computed(() => !!address.value);
 const shortAddress = computed(() =>
@@ -15,10 +17,10 @@ const shortAddress = computed(() =>
     : null
 );
 
-export function useWallet() {
-  let handleAccountsChanged: ((...args: unknown[]) => void) | null = null;
-  let handleChainChanged: (() => void) | null = null;
+let handleAccountsChanged: ((...args: unknown[]) => void) | null = null;
+let handleChainChanged: (() => void) | null = null;
 
+export function useWallet() {
   // Initializes provider, signer, and sets address
   const setupProvider = async (ethProvider: MetaMaskInpageProvider) => {
     const browserProvider = new BrowserProvider(ethProvider);
@@ -81,7 +83,6 @@ export function useWallet() {
         method: "wallet_revokePermissions",
         params: [{ eth_accounts: {} }],
       });
-      console.info("MetaMask permission revoked.");
     } catch (err) {
       console.warn("Revoke permission failed:", err);
     }
@@ -111,7 +112,6 @@ export function useWallet() {
       attachListeners(eth);
     } catch (err: any) {
       console.error("[!] Wallet connection failed:", err);
-
       if (err.code === -32002) {
         alert("MetaMask popup already open. Please respond to it.");
       }
@@ -122,6 +122,10 @@ export function useWallet() {
 
   // Auto-connect on page load
   onMounted(async () => {
+    if (hasMounted.value) return;
+
+    hasMounted.value = true;
+
     const eth = window.ethereum;
 
     if (!eth) return;
@@ -137,6 +141,8 @@ export function useWallet() {
       }
     } catch (err) {
       console.warn("Auto-connect failed:", err);
+    } finally {
+      hasRequestedWallet.value = true;
     }
   });
 
@@ -147,6 +153,7 @@ export function useWallet() {
     shortAddress,
     isConnected,
     isConnecting,
+    hasRequestedWallet,
     walletType,
     provider,
   };
