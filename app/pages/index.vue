@@ -6,8 +6,11 @@ const {
   connectWallet,
   disconnectWallet,
   reselectAccounts,
-  accounts,
+  switchNetwork,
+  chainList,
+  chainId,
   address,
+  accounts,
   isConnected,
   shortAddress,
   hasRequested,
@@ -43,7 +46,6 @@ const wallets = [
     connectable: false,
   },
 ];
-
 const activeTab = ref<"send" | "swap" | "bridge" | "receive">("send");
 
 function handleConnect(key: string) {
@@ -138,6 +140,12 @@ function copyAddress() {
                 class="flex items-center justify-between py-2"
               >
                 <span class="font-mono text-sm truncate">{{ a }}</span>
+                <button
+                  class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
+                  @click="copyAddress()"
+                >
+                  Copy
+                </button>
                 <span v-if="a === address" class="text-xs text-emerald-600"
                   >Current</span
                 >
@@ -146,15 +154,20 @@ function copyAddress() {
           </div>
 
           <div class="rounded-2xl border p-4">
-            <h4 class="text-sm font-semibold text-slate-800">Your address</h4>
+            <h4 class="text-sm font-semibold text-slate-800">Network: {{}}</h4>
             <div class="mt-2 flex items-center gap-3">
-              <span class="font-mono text-sm truncate">{{ address }}</span>
-              <button
-                class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
-                @click="copyAddress()"
-              >
-                Copy
-              </button>
+              <div class="relative">
+                <select
+                  :value="chainId || ''"
+                  class="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                  @change="e=>switchNetwork((e.target as HTMLSelectElement).value)"
+                >
+                  <option disabled value="">Select…</option>
+                  <option v-for="o in chainList" :key="o.id" :value="o.id">
+                    {{ o.name }}
+                  </option>
+                </select>
+              </div>
             </div>
           </div>
         </div>

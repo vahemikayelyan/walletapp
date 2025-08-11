@@ -53,7 +53,9 @@ function attachListeners(eth: MetaMaskInpageProvider) {
     address.value = a?.[0] ?? null;
     if (!a?.length) void disconnectWallet();
   };
-  onChain = () => window.location.reload();
+  onChain = () => {
+    window.location.reload();
+  };
   onDisc = () => {
     void disconnectWallet();
   };
@@ -157,6 +159,75 @@ const autoConnectOnce = async () => {
   }
 };
 
+// Simple chain registry (add more as you like)
+const CHAINS: Record<
+  string,
+  {
+    name: string;
+    rpc: string[];
+    explorers?: string[];
+    currency: { name: string; symbol: string; decimals: number };
+  }
+> = {
+  "0x1": {
+    name: "Ethereum",
+    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpc: ["https://rpc.ankr.com/eth"],
+  },
+  "0x89": {
+    name: "Polygon",
+    currency: { name: "MATIC", symbol: "MATIC", decimals: 18 },
+    rpc: ["https://polygon-rpc.com"],
+  },
+  "0xa4b1": {
+    name: "Arbitrum One",
+    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpc: ["https://arb1.arbitrum.io/rpc"],
+  },
+  "0x2105": {
+    name: "Base",
+    currency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpc: ["https://mainnet.base.org"],
+  },
+  "0x38": {
+    name: "BNB Smart Chain",
+    currency: { name: "BNB", symbol: "BNB", decimals: 18 },
+    rpc: ["https://bsc-dataseed.binance.org"],
+  },
+};
+
+async function switchNetwork(chainIdHex: string) {
+  const eth = getEth();
+  if (!eth) return;
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: chainIdHex }],
+    });
+    // your chainChanged listener already reloads or you can manually set chainId here
+    // chainId.value = chainIdHex
+  } catch (e: any) {
+    // If chain isn’t added in the wallet
+    if (e?.code === 4902 && CHAINS[chainIdHex]) {
+      const c = CHAINS[chainIdHex];
+      await eth.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: chainIdHex,
+            chainName: c.name,
+            nativeCurrency: c.currency,
+            rpcUrls: c.rpc,
+            blockExplorerUrls: c.explorers || [],
+          },
+        ],
+      });
+    } else {
+      throw e;
+    }
+  }
+}
+
 /* --------------------------------- Public ---------------------------------- */
 export function useWallet() {
   onMounted(() => {
@@ -169,16 +240,23 @@ export function useWallet() {
       ? `${address.value.slice(0, 7)}...${address.value.slice(-5)}`
       : null
   );
+  const chainList = computed(() =>
+    Object.entries(CHAINS)
+      .map(([id, c]) => ({ id, name: c.name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  );
 
   return {
     // actions
     connectWallet,
     disconnectWallet,
     reselectAccounts,
+    switchNetwork,
 
     // state
     provider,
     walletType,
+    chainList,
     chainId,
     accounts,
     address,
