@@ -8,7 +8,6 @@
   </a>
 
   <header
-    v-if="hasRequestedWallet"
     class="shadow-sm sticky top-0 z-50 border-b border-gray-300/90 bg-white backdrop-blur"
   >
     <nav class="container mx-auto px-4">
@@ -51,9 +50,6 @@
               </span>
             </NuxtLink>
           </div>
-
-          <!-- ConnectWallet: button -->
-          <ConnectWallet />
 
           <!-- Mobile: menu button -->
           <button
@@ -112,7 +108,6 @@
 </template>
 
 <script setup lang="ts">
-const { hasRequestedWallet } = useWallet();
 const links = [
   { label: "Home", to: "/" },
   { label: "Cryptos", to: "/cryptos" },

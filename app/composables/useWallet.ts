@@ -1,165 +1,195 @@
+// composables/useWallet.client.ts
 import type { MetaMaskInpageProvider } from "@metamask/providers";
 import { BrowserProvider } from "ethers";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, shallowRef } from "vue";
 
-// Global reactive state
-const provider = ref<BrowserProvider | null>();
-const walletType = ref<"evm" | null>();
-const address = ref<string | null>();
+/* ----------------------------- Module-level refs ---------------------------- */
+const provider = shallowRef<BrowserProvider | null>(null);
+const walletType = ref<"evm" | null>(null);
+const accounts = ref<string[]>([]);
+const address = ref<string | null>(null);
+const chainId = ref<string | null>(null);
 const isConnecting = ref(false);
-const hasMounted = ref(false);
-const hasRequestedWallet = ref(false);
+const hasRequested = ref(false); // true after first eth_accounts check
+const hasAutoRan = ref(false); // ensure autoConnect runs once per page load
 
-const isConnected = computed(() => !!address.value);
-const shortAddress = computed(() =>
-  address.value
-    ? `${address.value.slice(0, 7)}...${address.value.slice(-5)}`
-    : null
-);
+/* --------------------------------- Helpers --------------------------------- */
+function getEth(): MetaMaskInpageProvider | null {
+  return (window as any)?.ethereum ?? null;
+}
 
-let handleAccountsChanged: ((...args: unknown[]) => void) | null = null;
-let handleChainChanged: (() => void) | null = null;
+async function setupProvider(
+  eth: MetaMaskInpageProvider,
+  initialAccs?: string[]
+) {
+  provider.value = new BrowserProvider(eth);
+  walletType.value = "evm";
 
-export function useWallet() {
-  // Initializes provider, signer, and sets address
-  const setupProvider = async (ethProvider: MetaMaskInpageProvider) => {
-    const browserProvider = new BrowserProvider(ethProvider);
-    const signer = await browserProvider.getSigner();
-    const userAddress = await signer.getAddress();
+  try {
+    chainId.value = (await eth.request({ method: "eth_chainId" })) as string;
+  } catch {
+    chainId.value = null;
+  }
 
-    provider.value = browserProvider;
-    address.value = userAddress;
+  if (initialAccs?.length) {
+    accounts.value = initialAccs;
+    address.value = initialAccs[0] ?? null;
+  } else {
+    const accs = (await eth.request({ method: "eth_accounts" })) as string[];
+    accounts.value = accs ?? [];
+    address.value = accs?.[0] ?? null;
+  }
+}
+
+/* -------------------------------- Listeners -------------------------------- */
+let onAcc: ((a: string[]) => void) | null = null;
+let onChain: ((id: string) => void) | null = null;
+let onDisc: ((e: unknown) => void) | null = null;
+
+function attachListeners(eth: MetaMaskInpageProvider) {
+  if (onAcc || onChain || onDisc) return;
+  onAcc = (a: string[]) => {
+    accounts.value = a ?? [];
+    address.value = a?.[0] ?? null;
+    if (!a?.length) void disconnectWallet();
   };
-
-  // Attach wallet event listeners
-  const attachListeners = (ethProvider: MetaMaskInpageProvider) => {
-    if (handleAccountsChanged || handleChainChanged) return;
-
-    handleAccountsChanged = (...args: unknown[]) => {
-      const accounts = args[0] as string[];
-
-      if (accounts?.length) {
-        address.value = accounts[0];
-      } else {
-        disconnectWallet();
-      }
-    };
-
-    handleChainChanged = () => {
-      window.location.reload();
-    };
-
-    ethProvider.on("accountsChanged", handleAccountsChanged);
-    ethProvider.on("chainChanged", handleChainChanged);
+  onChain = () => window.location.reload();
+  onDisc = () => {
+    void disconnectWallet();
   };
+  eth.on("accountsChanged", onAcc as any);
+  eth.on("chainChanged", onChain as any);
+  eth.on("disconnect", onDisc as any);
+}
 
-  // Remove listeners
-  const detachListeners = () => {
-    const eth = window.ethereum;
+function detachListeners() {
+  const eth = getEth();
+  if (!eth) return;
+  if (onAcc) {
+    eth.removeListener("accountsChanged", onAcc as any);
+    onAcc = null;
+  }
+  if (onChain) {
+    eth.removeListener("chainChanged", onChain as any);
+    onChain = null;
+  }
+  if (onDisc) {
+    eth.removeListener("disconnect", onDisc as any);
+    onDisc = null;
+  }
+}
 
-    if (!eth) return;
+/* --------------------------------- Actions --------------------------------- */
+const connectWallet = async () => {
+  const eth = getEth();
+  if (!eth) {
+    alert("MetaMask is not installed.");
+    return;
+  }
+  if (isConnecting.value || !!address.value) return;
 
-    if (handleAccountsChanged) {
-      eth.removeListener("accountsChanged", handleAccountsChanged);
-      handleAccountsChanged = null;
-    }
+  isConnecting.value = true;
+  try {
+    const accs = (await eth.request({
+      method: "eth_requestAccounts",
+    })) as string[];
+    if (!accs?.length) throw new Error("No accounts returned");
+    await setupProvider(eth, accs);
+    attachListeners(eth);
+  } catch (err: any) {
+    console.error("[Wallet] connect failed:", err);
+    if (err?.code === -32002)
+      alert("MetaMask popup is already open. Please respond to it.");
+  } finally {
+    isConnecting.value = false;
+    hasRequested.value = true;
+  }
+};
 
-    if (handleChainChanged) {
-      eth.removeListener("chainChanged", handleChainChanged);
-      handleChainChanged = null;
-    }
-  };
+const disconnectWallet = async () => {
+  detachListeners();
+  accounts.value = [];
+  address.value = null;
+  chainId.value = null;
+  walletType.value = null;
+  provider.value = null;
 
-  // Disconnect logic
-  const disconnectWallet = async () => {
-    address.value = null;
-    provider.value = null;
-    walletType.value = null;
+  try {
+    await getEth()?.request({
+      method: "wallet_revokePermissions",
+      params: [{ eth_accounts: {} }],
+    });
+  } catch (e) {
+    console.warn("Revoke permission failed:", e);
+  }
+};
 
-    detachListeners();
+function reselectAccounts() {
+  const eth = getEth();
+  if (!eth) return;
+  eth.request({
+    method: "wallet_requestPermissions",
+    params: [{ eth_accounts: {} }],
+  });
+}
 
-    try {
-      await window.ethereum?.request({
-        method: "wallet_revokePermissions",
-        params: [{ eth_accounts: {} }],
-      });
-    } catch (err) {
-      console.warn("Revoke permission failed:", err);
-    }
-  };
+/* ------------------------------ Auto-connect ------------------------------- */
+const autoConnectOnce = async () => {
+  if (hasAutoRan.value) return;
+  hasAutoRan.value = true;
 
-  // Connect logic
-  const connectWallet = async () => {
-    const eth = window.ethereum;
+  const eth = getEth();
+  if (!eth) {
+    hasRequested.value = true;
+    return;
+  }
 
-    if (typeof window === "undefined" || !eth) {
-      alert("MetaMask is not installed.");
-      return;
-    }
-
-    if (isConnecting.value || isConnected.value) return;
-
-    isConnecting.value = true;
-
-    try {
-      const accounts = (await eth.request({
-        method: "eth_requestAccounts",
-      })) as string[];
-
-      if (!accounts?.length) throw new Error("No accounts returned");
-
-      await setupProvider(eth);
+  try {
+    const accs = (await eth.request({ method: "eth_accounts" })) as string[];
+    if (accs?.length) {
+      await setupProvider(eth, accs);
       attachListeners(eth);
-    } catch (err: any) {
-      console.error("[!] Wallet connection failed:", err);
-      if (err.code === -32002) {
-        alert("MetaMask popup already open. Please respond to it.");
-      }
-    } finally {
-      isConnecting.value = false;
     }
-  };
+  } catch (e) {
+    console.warn("Auto-connect failed:", e);
+  } finally {
+    hasRequested.value = true;
+  }
+};
 
-  // Auto-connect on page load
-  onMounted(async () => {
-    if (hasMounted.value) return;
-
-    hasMounted.value = true;
-
-    const eth = window.ethereum;
-
-    if (!eth) return;
-
-    try {
-      const accounts = (await eth.request({
-        method: "eth_accounts",
-      })) as string[];
-
-      if (Array.isArray(accounts) && accounts.length > 0) {
-        await setupProvider(eth);
-        attachListeners(eth);
-      }
-    } catch (err) {
-      console.warn("Auto-connect failed:", err);
-    } finally {
-      hasRequestedWallet.value = true;
-    }
+/* --------------------------------- Public ---------------------------------- */
+export function useWallet() {
+  onMounted(() => {
+    void autoConnectOnce();
   });
 
+  const isConnected = computed(() => !!address.value);
+  const shortAddress = computed(() =>
+    address.value
+      ? `${address.value.slice(0, 7)}...${address.value.slice(-5)}`
+      : null
+  );
+
   return {
+    // actions
     connectWallet,
     disconnectWallet,
-    address,
-    shortAddress,
-    isConnected,
-    isConnecting,
-    hasRequestedWallet,
-    walletType,
+    reselectAccounts,
+
+    // state
     provider,
+    walletType,
+    chainId,
+    accounts,
+    address,
+    isConnecting,
+    hasRequested,
+    isConnected,
+    shortAddress,
   };
 }
 
-// 🔒 Declare ethereum globally
+/* ------------------------------ Global typing ------------------------------ */
 declare global {
   interface Window {
     ethereum?: MetaMaskInpageProvider;
