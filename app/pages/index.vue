@@ -1,6 +1,6 @@
 <!-- pages/index.vue -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { ref } from "vue";
 
 const {
   connectWallet,
@@ -12,7 +12,6 @@ const {
   address,
   accounts,
   isConnected,
-  shortAddress,
   hasRequested,
 } = useWallet();
 
@@ -48,20 +47,33 @@ const wallets = [
 ];
 const activeTab = ref<"send" | "swap" | "bridge" | "receive">("send");
 
+const shortAddress = computed(() => short(address.value));
+
+function short(a?: string | null): string {
+  return a ? `${a.slice(0, 7)}...${a.slice(-5)}` : "";
+}
+
+function onNetworkChange(e: Event) {
+  const id = (e.target as HTMLSelectElement).value;
+  switchNetwork(id);
+}
+
 function handleConnect(key: string) {
   if (key === "metamask") connectWallet();
 }
 
-const current = computed(() => address.value);
-function copyAddress() {
-  if (current.value) navigator.clipboard?.writeText(current.value);
+function copyText(text?: string | null) {
+  if (!text) return;
+  if (import.meta.client && typeof navigator !== "undefined") {
+    navigator.clipboard?.writeText(text);
+  }
 }
 </script>
 
 <template>
   <div v-if="hasRequested" class="text-slate-900">
     <!-- Hero -->
-    <section class="mx-auto max-w-6xl px-6 pt-10 pb-6">
+    <section class="mx-auto max-w-6xl px-6 pb-6">
       <h1 class="text-3xl md:text-5xl font-semibold tracking-tight">
         Connect a wallet to get started
       </h1>
@@ -102,7 +114,7 @@ function copyAddress() {
     </section>
 
     <!-- Dashboard (connected) -->
-    <section v-else class="mx-auto max-w-6xl px-6 pb-24">
+    <section v-else class="mx-auto max-w-6xl px-6">
       <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <!-- Top bar -->
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -139,28 +151,28 @@ function copyAddress() {
                 :key="a"
                 class="flex items-center justify-between py-2"
               >
-                <span class="font-mono text-sm truncate">{{ a }}</span>
-                <button
-                  class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
-                  @click="copyAddress()"
-                >
-                  Copy
-                </button>
+                <span class="font-mono text-sm truncate">{{ short(a) }}</span>
                 <span v-if="a === address" class="text-xs text-emerald-600"
                   >Current</span
                 >
+                <button
+                  class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
+                  @click="copyText(a)"
+                >
+                  Copy
+                </button>
               </div>
             </div>
           </div>
 
           <div class="rounded-2xl border p-4">
-            <h4 class="text-sm font-semibold text-slate-800">Network: {{}}</h4>
+            <h4 class="text-sm font-semibold text-slate-800">Network</h4>
             <div class="mt-2 flex items-center gap-3">
               <div class="relative">
                 <select
                   :value="chainId || ''"
                   class="rounded-lg border px-3 py-1.5 text-sm bg-white"
-                  @change="e=>switchNetwork((e.target as HTMLSelectElement).value)"
+                  @change="onNetworkChange"
                 >
                   <option disabled value="">Select…</option>
                   <option v-for="o in chainList" :key="o.id" :value="o.id">
@@ -317,7 +329,6 @@ function copyAddress() {
                 <span class="font-mono text-sm truncate">{{ address }}</span>
                 <button
                   class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
-                  @click="copyAddress()"
                 >
                   Copy
                 </button>

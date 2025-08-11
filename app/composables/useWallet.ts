@@ -235,11 +235,6 @@ export function useWallet() {
   });
 
   const isConnected = computed(() => !!address.value);
-  const shortAddress = computed(() =>
-    address.value
-      ? `${address.value.slice(0, 7)}...${address.value.slice(-5)}`
-      : null
-  );
   const chainList = computed(() =>
     Object.entries(CHAINS)
       .map(([id, c]) => ({ id, name: c.name }))
@@ -260,10 +255,9 @@ export function useWallet() {
     chainId,
     accounts,
     address,
+    isConnected,
     isConnecting,
     hasRequested,
-    isConnected,
-    shortAddress,
   };
 }
 
