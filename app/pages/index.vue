@@ -1,14 +1,19 @@
 <!-- pages/index.vue -->
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 const {
   connectWallet,
   disconnectWallet,
   reselectAccounts,
   switchNetwork,
+  fetchBalance,
+  balance,
   chainList,
-  chainId,
+  chainId, // hex string for select
+  numericChainId, // decimal for API calls
+  nativeSymbol,
+  currentExplorerTxBase,
   address,
   accounts,
   isConnected,
@@ -45,27 +50,77 @@ const wallets = [
     connectable: false,
   },
 ];
+
 const activeTab = ref<"send" | "swap" | "bridge" | "receive">("send");
-
 const shortAddress = computed(() => short(address.value));
-
 function short(a?: string | null): string {
   return a ? `${a.slice(0, 7)}...${a.slice(-5)}` : "";
 }
 
 function onNetworkChange(e: Event) {
-  const id = (e.target as HTMLSelectElement).value;
+  const id = (e.target as HTMLSelectElement).value; // hex
   switchNetwork(id);
 }
 
 function handleConnect(key: string) {
   if (key === "metamask") connectWallet();
 }
-
 function copyText(text?: string | null) {
   if (!text) return;
-  if (import.meta.client && typeof navigator !== "undefined") {
+  if (import.meta.client && typeof navigator !== "undefined")
     navigator.clipboard?.writeText(text);
+}
+
+/** ------- Send tab state & handler ------- **/
+const to = ref("");
+const amount = ref<string>("");
+const token = ref<string>(""); // leave empty for native, else ERC-20 contract
+const sending = ref(false);
+const sendError = ref<string | null>(null);
+const txHash = ref<string | null>(null);
+const explorerUrl = computed(() =>
+  txHash.value && currentExplorerTxBase
+    ? currentExplorerTxBase + txHash.value
+    : null
+);
+
+async function onSend() {
+  sendError.value = null;
+  txHash.value = null;
+
+  if (!isConnected.value) {
+    sendError.value = "Connect a wallet first.";
+    return;
+  }
+  if (!to.value || !amount.value) {
+    sendError.value = "Enter recipient and amount.";
+    return;
+  }
+  if (!numericChainId.value) {
+    sendError.value = "Unknown chain.";
+    return;
+  }
+
+  sending.value = true;
+  try {
+    const res = await $fetch<{ hash: string; status?: string }>(
+      "/api/transfer",
+      {
+        method: "POST",
+        body: {
+          to: to.value.trim(),
+          amount: amount.value.trim(),
+          token: token.value ? token.value.trim() : null,
+          chainId: Number(numericChainId.value),
+        },
+      }
+    );
+    txHash.value = res.hash;
+    await fetchBalance(); // refresh native balance after send
+  } catch (e: any) {
+    sendError.value = e?.data?.statusMessage || e?.message || "Failed to send.";
+  } finally {
+    sending.value = false;
   }
 }
 </script>
@@ -92,7 +147,7 @@ function copyText(text?: string | null) {
           class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
         >
           <div class="flex items-center gap-3">
-            <img :src="w.icon" :alt="w.name" class="h-8 w-8" />
+            <!--<img :src="w.icon" :alt="w.name" class="h-8 w-8" />-->
             <h3 class="text-lg font-semibold">{{ w.name }}</h3>
           </div>
           <p class="mt-2 text-sm text-slate-600">{{ w.desc }}</p>
@@ -118,12 +173,16 @@ function copyText(text?: string | null) {
       <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <!-- Top bar -->
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3">
             <span
               class="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400"
             ></span>
             <span class="font-mono text-sm">{{ shortAddress }}</span>
             <span class="text-xs text-slate-500">MetaMask</span>
+            <span class="text-xs text-slate-500">
+              • Balance: {{ balance ? Number(balance).toFixed(4) : "—" }}
+              {{ nativeSymbol }}
+            </span>
           </div>
           <div class="flex items-center gap-2">
             <button
@@ -137,7 +196,6 @@ function copyText(text?: string | null) {
               @click="disconnectWallet()"
               aria-label="Disconnect wallet"
             >
-              <!-- logout icon: arrow leaving a square -->
               <svg
                 viewBox="0 0 24 24"
                 class="h-4 w-4"
@@ -185,8 +243,9 @@ function copyText(text?: string | null) {
             <div class="mt-2 flex items-center gap-3">
               <div class="relative">
                 <select
+                  id="networks"
                   :value="chainId || ''"
-                  class="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                  class="rounded-lg border px-2 py-1.5 bg-white"
                   @change="onNetworkChange"
                 >
                   <option disabled value="">Select…</option>
@@ -240,25 +299,57 @@ function copyText(text?: string | null) {
               <label class="text-sm">
                 <span class="block text-slate-600">To address</span>
                 <input
+                  v-model="to"
                   type="text"
                   class="mt-1 w-full rounded-lg border px-3 py-2"
                   placeholder="0x…"
                 />
               </label>
               <label class="text-sm">
-                <span class="block text-slate-600">Amount</span>
+                <span class="block text-slate-600"
+                  >Amount ({{ nativeSymbol }}) or token units</span
+                >
                 <input
+                  v-model="amount"
                   type="number"
                   step="any"
                   class="mt-1 w-full rounded-lg border px-3 py-2"
                   placeholder="0.00"
                 />
               </label>
-              <button
-                class="mt-2 inline-flex w-full md:w-auto items-center justify-center rounded-xl bg-amber-400 px-4 py-2 font-semibold text-slate-900 ring-1 ring-amber-300 hover:bg-amber-500"
-              >
-                Send
-              </button>
+              <label class="text-sm md:col-span-2">
+                <span class="block text-slate-600"
+                  >ERC-20 token (optional — leave empty for native
+                  {{ nativeSymbol }})</span
+                >
+                <input
+                  v-model="token"
+                  type="text"
+                  class="mt-1 w-full rounded-lg border px-3 py-2"
+                  placeholder="ERC-20 contract address"
+                />
+              </label>
+
+              <div class="md:col-span-2 flex items-center gap-3">
+                <button
+                  @click="onSend"
+                  :disabled="sending || !isConnected"
+                  class="mt-2 inline-flex items-center justify-center rounded-xl bg-amber-400 px-4 py-2 font-semibold text-slate-900 ring-1 ring-amber-300 hover:bg-amber-500 disabled:opacity-60"
+                >
+                  {{ sending ? "Sending…" : "Send" }}
+                </button>
+
+                <span v-if="sendError" class="text-sm text-rose-600">{{
+                  sendError
+                }}</span>
+                <a
+                  v-if="txHash && explorerUrl"
+                  :href="explorerUrl"
+                  target="_blank"
+                  class="text-sm text-emerald-700 underline"
+                  >View tx</a
+                >
+              </div>
             </div>
 
             <!-- Swap -->
@@ -266,36 +357,7 @@ function copyText(text?: string | null) {
               v-else-if="activeTab === 'swap'"
               class="grid gap-3 md:grid-cols-2"
             >
-              <label class="text-sm">
-                <span class="block text-slate-600">From token</span>
-                <input
-                  type="text"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="e.g., ETH"
-                />
-              </label>
-              <label class="text-sm">
-                <span class="block text-slate-600">To token</span>
-                <input
-                  type="text"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="e.g., USDC"
-                />
-              </label>
-              <label class="text-sm md:col-span-2">
-                <span class="block text-slate-600">Amount</span>
-                <input
-                  type="number"
-                  step="any"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="0.00"
-                />
-              </label>
-              <button
-                class="mt-2 inline-flex w-full md:w-auto items-center justify-center rounded-xl bg-amber-400 px-4 py-2 font-semibold text-slate-900 ring-1 ring-amber-300 hover:bg-amber-500"
-              >
-                Swap
-              </button>
+              <p class="text-sm text-slate-600 md:col-span-2">Coming soon…</p>
             </div>
 
             <!-- Bridge -->
@@ -303,36 +365,7 @@ function copyText(text?: string | null) {
               v-else-if="activeTab === 'bridge'"
               class="grid gap-3 md:grid-cols-2"
             >
-              <label class="text-sm">
-                <span class="block text-slate-600">From chain</span>
-                <input
-                  type="text"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="e.g., Ethereum"
-                />
-              </label>
-              <label class="text-sm">
-                <span class="block text-slate-600">To chain</span>
-                <input
-                  type="text"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="e.g., Polygon"
-                />
-              </label>
-              <label class="text-sm md:col-span-2">
-                <span class="block text-slate-600">Amount</span>
-                <input
-                  type="number"
-                  step="any"
-                  class="mt-1 w-full rounded-lg border px-3 py-2"
-                  placeholder="0.00"
-                />
-              </label>
-              <button
-                class="mt-2 inline-flex w-full md:w-auto items-center justify-center rounded-xl bg-amber-400 px-4 py-2 font-semibold text-slate-900 ring-1 ring-amber-300 hover:bg-amber-500"
-              >
-                Bridge
-              </button>
+              <p class="text-sm text-slate-600 md:col-span-2">Coming soon…</p>
             </div>
 
             <!-- Receive -->
@@ -344,6 +377,7 @@ function copyText(text?: string | null) {
                 <span class="font-mono text-sm truncate">{{ address }}</span>
                 <button
                   class="rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
+                  @click="copyText(address)"
                 >
                   Copy
                 </button>
