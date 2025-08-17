@@ -1,18 +1,28 @@
-<!-- pages/index.vue -->
+<!-- pages/index.vue — pure viem, driven by CHAIN_MAP -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import {
+  erc20Abi,
+  getAddress,
+  isAddress,
+  parseEther,
+  parseUnits,
+  type Address,
+} from "viem";
 
 const {
+  walletClient,
+  publicClient,
+
   connectWallet,
   disconnectWallet,
   reselectAccounts,
   switchNetwork,
   fetchBalance,
+
   balance,
   chainList,
-  chainId, // hex string for select
-  numericChainId, // decimal for API calls
-  nativeSymbol,
+  chainId,
+  currentChainMeta,
   currentExplorerTxBase,
   address,
   accounts,
@@ -20,6 +30,7 @@ const {
   hasRequested,
 } = useWallet();
 
+/* ------------------------------- UI helpers ------------------------------- */
 const wallets = [
   {
     key: "metamask",
@@ -53,37 +64,60 @@ const wallets = [
 
 const activeTab = ref<"send" | "swap" | "bridge" | "receive">("send");
 const shortAddress = computed(() => short(address.value));
+
 function short(a?: string | null): string {
   return a ? `${a.slice(0, 7)}...${a.slice(-5)}` : "";
 }
 
 function onNetworkChange(e: Event) {
-  const id = (e.target as HTMLSelectElement).value; // hex
-  switchNetwork(id);
+  const id = (e.target as HTMLSelectElement).value;
+  if (id) void switchNetwork(id as any);
 }
 
 function handleConnect(key: string) {
-  if (key === "metamask") connectWallet();
-}
-function copyText(text?: string | null) {
-  if (!text) return;
-  if (import.meta.client && typeof navigator !== "undefined")
-    navigator.clipboard?.writeText(text);
+  if (key === "metamask") void connectWallet();
 }
 
-/** ------- Send tab state & handler ------- **/
+function copyText(text?: string | null) {
+  if (!text) return;
+  if (process.client && navigator?.clipboard) {
+    navigator.clipboard.writeText(text);
+  }
+}
+
+/* ------------------------------- Send state -------------------------------- */
 const to = ref("");
 const amount = ref<string>("");
-const token = ref<string>(""); // leave empty for native, else ERC-20 contract
+const token = ref<string>(""); // ERC-20 contract address; empty = native
 const sending = ref(false);
 const sendError = ref<string | null>(null);
 const txHash = ref<string | null>(null);
+
 const explorerUrl = computed(() =>
-  txHash.value && currentExplorerTxBase
-    ? currentExplorerTxBase + txHash.value
+  txHash.value && currentExplorerTxBase.value
+    ? currentExplorerTxBase.value + txHash.value
     : null
 );
 
+const balanceDisplay = computed(() => {
+  const b = balance.value;
+  if (b == null) return "—";
+
+  const n = Number(b);
+  // Optional: show a hint for very small non-zero values
+  if (n > 0 && n < 0.0001) return "<0.0001";
+
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(n);
+});
+
+const canSend = computed(
+  () => isConnected.value && !!to.value && !!amount.value
+);
+
+/* --------------------------------- Send ------------------------------------ */
 async function onSend() {
   sendError.value = null;
   txHash.value = null;
@@ -92,33 +126,58 @@ async function onSend() {
     sendError.value = "Connect a wallet first.";
     return;
   }
-  if (!to.value || !amount.value) {
-    sendError.value = "Enter recipient and amount.";
+  if (!isAddress(to.value)) {
+    sendError.value = "Invalid recipient address.";
     return;
   }
-  if (!numericChainId.value) {
-    sendError.value = "Unknown chain.";
+  if (!amount.value || Number(amount.value) <= 0) {
+    sendError.value = "Enter a valid amount.";
     return;
   }
 
-  sending.value = true;
   try {
-    const res = await $fetch<{ hash: string; status?: string }>(
-      "/api/transfer",
-      {
-        method: "POST",
-        body: {
-          to: to.value.trim(),
-          amount: amount.value.trim(),
-          token: token.value ? token.value.trim() : null,
-          chainId: Number(numericChainId.value),
-        },
+    sending.value = true;
+
+    if (!token.value) {
+      // Native send
+      const hash = await walletClient.value?.sendTransaction({
+        account: address.value as Address,
+        to: getAddress(to.value),
+        chain: currentChainMeta.value,
+        value: parseEther(String(amount.value ?? "0")),
+      });
+      if (hash) {
+        txHash.value = hash;
       }
-    );
-    txHash.value = res.hash;
-    await fetchBalance(); // refresh native balance after send
+    } else {
+      // ERC-20 transfer
+      if (!isAddress(token.value)) {
+        sendError.value = "Invalid ERC-20 token address.";
+        return;
+      }
+      const tokenAddr = getAddress(token.value);
+
+      const decimals = (await publicClient.value!.readContract({
+        address: tokenAddr,
+        abi: erc20Abi,
+        functionName: "decimals",
+      })) as number;
+
+      const { request } = await publicClient.value!.simulateContract({
+        account: address.value as Address,
+        address: tokenAddr,
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [getAddress(to.value), parseUnits(amount.value, decimals)],
+      });
+
+      const hash = await walletClient.value!.writeContract(request);
+      txHash.value = hash;
+    }
+
+    await fetchBalance();
   } catch (e: any) {
-    sendError.value = e?.data?.statusMessage || e?.message || "Failed to send.";
+    sendError.value = e?.shortMessage || e?.message || "Failed to send.";
   } finally {
     sending.value = false;
   }
@@ -147,7 +206,7 @@ async function onSend() {
           class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
         >
           <div class="flex items-center gap-3">
-            <!--<img :src="w.icon" :alt="w.name" class="h-8 w-8" />-->
+            <!-- <img :src="w.icon" :alt="w.name" class="h-8 w-8" /> -->
             <h3 class="text-lg font-semibold">{{ w.name }}</h3>
           </div>
           <p class="mt-2 text-sm text-slate-600">{{ w.desc }}</p>
@@ -180,8 +239,8 @@ async function onSend() {
             <span class="font-mono text-sm">{{ shortAddress }}</span>
             <span class="text-xs text-slate-500">MetaMask</span>
             <span class="text-xs text-slate-500">
-              • Balance: {{ balance ? Number(balance).toFixed(4) : "—" }}
-              {{ nativeSymbol }}
+              • Balance: {{ balanceDisplay }}
+              {{ currentChainMeta?.nativeCurrency.name }}
             </span>
           </div>
           <div class="flex items-center gap-2">
@@ -246,6 +305,7 @@ async function onSend() {
                   id="networks"
                   :value="chainId || ''"
                   class="rounded-lg border px-2 py-1.5 bg-white"
+                  :disabled="!isConnected"
                   @change="onNetworkChange"
                 >
                   <option disabled value="">Select…</option>
@@ -307,7 +367,8 @@ async function onSend() {
               </label>
               <label class="text-sm">
                 <span class="block text-slate-600"
-                  >Amount ({{ nativeSymbol }}) or token units</span
+                  >Amount ({{ currentChainMeta?.nativeCurrency.name }}) or token
+                  units</span
                 >
                 <input
                   v-model="amount"
@@ -320,7 +381,7 @@ async function onSend() {
               <label class="text-sm md:col-span-2">
                 <span class="block text-slate-600"
                   >ERC-20 token (optional — leave empty for native
-                  {{ nativeSymbol }})</span
+                  {{ currentChainMeta?.nativeCurrency.name }})</span
                 >
                 <input
                   v-model="token"
@@ -333,7 +394,7 @@ async function onSend() {
               <div class="md:col-span-2 flex items-center gap-3">
                 <button
                   @click="onSend"
-                  :disabled="sending || !isConnected"
+                  :disabled="sending || !canSend"
                   class="mt-2 inline-flex items-center justify-center rounded-xl bg-amber-400 px-4 py-2 font-semibold text-slate-900 ring-1 ring-amber-300 hover:bg-amber-500 disabled:opacity-60"
                 >
                   {{ sending ? "Sending…" : "Send" }}
@@ -346,6 +407,7 @@ async function onSend() {
                   v-if="txHash && explorerUrl"
                   :href="explorerUrl"
                   target="_blank"
+                  rel="noopener noreferrer"
                   class="text-sm text-emerald-700 underline"
                   >View tx</a
                 >
