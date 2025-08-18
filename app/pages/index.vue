@@ -18,6 +18,7 @@ const {
   reselectAccounts,
   switchNetwork,
   fetchBalance,
+  waitForTx,
 
   balance,
   chainList,
@@ -91,7 +92,7 @@ const amount = ref<string>("");
 const token = ref<string>(""); // ERC-20 contract address; empty = native
 const sending = ref(false);
 const sendError = ref<string | null>(null);
-const txHash = ref<string | null>(null);
+const txHash = ref<`0x${string}` | null>(null);
 
 const explorerUrl = computed(() =>
   txHash.value && currentExplorerTxBase.value
@@ -102,11 +103,8 @@ const explorerUrl = computed(() =>
 const balanceDisplay = computed(() => {
   const b = balance.value;
   if (b == null) return "—";
-
   const n = Number(b);
-  // Optional: show a hint for very small non-zero values
   if (n > 0 && n < 0.0001) return "<0.0001";
-
   return new Intl.NumberFormat(undefined, {
     minimumFractionDigits: 4,
     maximumFractionDigits: 4,
@@ -118,7 +116,21 @@ const canSend = computed(
 );
 
 /* --------------------------------- Send ------------------------------------ */
+// helpers (put near your other refs)
+const decimalsCache = new Map<string, number>();
+
+async function postSend(hash: `0x${string}`) {
+  txHash.value = hash;
+  await waitForTx(hash); // waits for confirmation
+  await fetchBalance(); // refresh balance after it's mined
+  amount.value = ""; // clear inputs on success
+  to.value = "";
+}
+
+// optimized onSend
 async function onSend() {
+  if (sending.value) return; // prevent double clicks
+
   sendError.value = null;
   txHash.value = null;
 
@@ -126,58 +138,75 @@ async function onSend() {
     sendError.value = "Connect a wallet first.";
     return;
   }
+  const from = address.value as Address | null;
+  if (!from) {
+    sendError.value = "No active account.";
+    return;
+  }
+
   if (!isAddress(to.value)) {
     sendError.value = "Invalid recipient address.";
     return;
   }
-  if (!amount.value || Number(amount.value) <= 0) {
+
+  const rawAmt = String(amount.value ?? "").trim();
+  if (!rawAmt || Number(rawAmt) <= 0) {
     sendError.value = "Enter a valid amount.";
+    return;
+  }
+
+  if (!walletClient.value || !publicClient.value) {
+    sendError.value = "Wallet client not ready.";
     return;
   }
 
   try {
     sending.value = true;
+    const recipient = getAddress(to.value);
 
     if (!token.value) {
       // Native send
-      const hash = await walletClient.value?.sendTransaction({
-        account: address.value as Address,
-        to: getAddress(to.value),
-        chain: currentChainMeta.value,
-        value: parseEther(String(amount.value ?? "0")),
+      const valueWei = parseEther(rawAmt);
+      const hash = await walletClient.value.sendTransaction({
+        account: from,
+        to: recipient,
+        value: valueWei,
       });
-      if (hash) {
-        txHash.value = hash;
-      }
-    } else {
-      // ERC-20 transfer
-      if (!isAddress(token.value)) {
-        sendError.value = "Invalid ERC-20 token address.";
-        return;
-      }
-      const tokenAddr = getAddress(token.value);
+      await postSend(hash);
+      return;
+    }
 
-      const decimals = (await publicClient.value!.readContract({
+    // ERC-20 transfer
+    if (!isAddress(token.value)) {
+      sendError.value = "Invalid ERC-20 token address.";
+      return;
+    }
+    const tokenAddr = getAddress(token.value);
+
+    // decimals (cached)
+    let decimals = decimalsCache.get(tokenAddr);
+    if (decimals == null) {
+      decimals = (await publicClient.value.readContract({
         address: tokenAddr,
         abi: erc20Abi,
         functionName: "decimals",
       })) as number;
-
-      const { request } = await publicClient.value!.simulateContract({
-        account: address.value as Address,
-        address: tokenAddr,
-        abi: erc20Abi,
-        functionName: "transfer",
-        args: [getAddress(to.value), parseUnits(amount.value, decimals)],
-      });
-
-      const hash = await walletClient.value!.writeContract(request);
-      txHash.value = hash;
+      decimalsCache.set(tokenAddr, decimals);
     }
 
-    await fetchBalance();
+    const qty = parseUnits(rawAmt, decimals);
+    const { request } = await publicClient.value.simulateContract({
+      account: from,
+      address: tokenAddr,
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [recipient, qty],
+    });
+
+    const hash = await walletClient.value.writeContract(request);
+    await postSend(hash);
   } catch (e: any) {
-    sendError.value = e?.shortMessage || e?.message || "Failed to send.";
+    sendError.value = e?.shortMessage ?? e?.message ?? "Failed to send.";
   } finally {
     sending.value = false;
   }
@@ -206,7 +235,6 @@ async function onSend() {
           class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
         >
           <div class="flex items-center gap-3">
-            <!-- <img :src="w.icon" :alt="w.name" class="h-8 w-8" /> -->
             <h3 class="text-lg font-semibold">{{ w.name }}</h3>
           </div>
           <p class="mt-2 text-sm text-slate-600">{{ w.desc }}</p>

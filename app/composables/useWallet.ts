@@ -7,9 +7,13 @@ import {
   formatEther,
   hexToBigInt,
   http,
+  type Account,
   type Address,
   type Chain,
   type Hex,
+  type PublicClient,
+  type Transport,
+  type WalletClient,
 } from "viem";
 import {
   arbitrum,
@@ -43,12 +47,10 @@ const pickRpc = (c?: Chain) =>
 const pickExplorer = (c?: Chain) => c?.blockExplorers?.default?.url;
 
 /* -------------------------------- State / refs -------------------------------- */
-const walletClient = shallowRef<ReturnType<typeof createWalletClient> | null>(
+const walletClient = shallowRef<WalletClient<Transport, Chain, Account> | null>(
   null
 );
-const publicClient = shallowRef<ReturnType<typeof createPublicClient> | null>(
-  null
-);
+const publicClient = shallowRef<PublicClient<Transport, Chain> | null>(null);
 
 const accounts = ref<Address[]>([]);
 const address = ref<Address | null>(null);
@@ -73,14 +75,15 @@ function setClientsFor(chainHex: Hex, eth: MetaMaskInpageProvider) {
   const chain = CHAIN_MAP[chainHex];
   const rpc = pickRpc(chain);
 
-  walletClient.value = createWalletClient({
-    chain, // set a chain: avoids needing `chain` on every call
+  // Pin generics so TChain = Chain (not Chain | undefined)
+  walletClient.value = createWalletClient<Transport, Chain, Account>({
+    chain,
     transport: custom(eth),
   });
 
-  publicClient.value = createPublicClient({
+  publicClient.value = createPublicClient<Transport, Chain>({
     chain,
-    transport: rpc ? http(rpc) : custom(eth), // fast reads via RPC, fallback to wallet
+    transport: rpc ? http(rpc) : custom(eth),
     batch: { multicall: true },
   });
 }
@@ -300,6 +303,13 @@ async function fetchBalance() {
   return _balReq;
 }
 
+/* ------------------------------ Tx helpers --------------------------------- */
+// Wait for a transaction receipt (confirmation)
+async function waitForTx(hash: `0x${string}`) {
+  if (!publicClient.value) throw new Error("Public client not ready");
+  return publicClient.value.waitForTransactionReceipt({ hash });
+}
+
 /* ------------------------------ Networks ----------------------------------- */
 async function switchNetwork(chainIdHex: Hex) {
   const eth = getEth();
@@ -375,6 +385,7 @@ export function useWallet() {
     reselectAccounts,
     switchNetwork,
     fetchBalance,
+    waitForTx, // ⬅️ exported
 
     // viem clients
     walletClient,
